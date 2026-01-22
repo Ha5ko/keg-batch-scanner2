@@ -1,6 +1,6 @@
 workflows:
-  android-keg-scanner:
-    name: Keg Batch Scanner (Android APK)
+  android-apk:
+    name: Android APK (Fresh RN Android each build)
     max_build_duration: 60
     instance_type: linux_x2
 
@@ -19,19 +19,20 @@ workflows:
           source: true
 
     scripts:
-      - name: Generate Android project (only if missing)
+      - name: Generate fresh Android project
         script: |
           set -e
-          echo "🔎 Checking for android/ folder..."
-          if [ ! -d "android" ]; then
-            echo "📱 android/ not found. Generating RN template android project..."
-            npx react-native@0.72.10 init KegBatchScannerTemp --version 0.72.10 --skip-install
-            cp -R KegBatchScannerTemp/android .
-            rm -rf KegBatchScannerTemp
-            echo "✅ android/ generated"
-          else
-            echo "✅ android/ already exists"
-          fi
+          echo "🧼 Forcing a fresh generated android/ each build..."
+          rm -rf android ios KegBatchScannerTemp
+
+          echo "📱 Creating RN template project (0.72.10)..."
+          npx react-native@0.72.10 init KegBatchScannerTemp --version 0.72.10 --skip-install
+
+          echo "✅ Copying android/ into workspace..."
+          cp -R KegBatchScannerTemp/android .
+          rm -rf KegBatchScannerTemp
+
+          echo "✅ android/ generated"
 
       - name: Install JS dependencies
         script: |
@@ -39,23 +40,23 @@ workflows:
           echo "📦 Installing dependencies..."
           npm install --legacy-peer-deps
 
-      - name: Configure Android SDK + Manifest + Gradle properties
+      - name: Configure Android SDK + Manifest + gradle.properties
         script: |
           set -e
           echo "🔧 Configuring Android build..."
 
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
-          mkdir -p android/app/src/main
 
+          mkdir -p android/app/src/main
           if [ -f "AndroidManifest.xml" ]; then
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-            echo "✅ Copied AndroidManifest.xml into android/app/src/main/"
+            echo "✅ Copied root AndroidManifest.xml into android/app/src/main/"
           else
             echo "❌ AndroidManifest.xml not found at repo root"
             exit 1
           fi
 
-          # SAFE gradle.properties (NO MaxPermSize)
+          # Write SAFE gradle.properties (NO MaxPermSize)
           cat > android/gradle.properties << 'EOF'
           org.gradle.jvmargs=-Xmx4g -Dkotlin.daemon.jvm.options=-Xmx2g
           org.gradle.parallel=true
@@ -71,53 +72,38 @@ workflows:
 
           echo "✅ android/gradle.properties written"
 
-      - name: Disable Flipper (surgical, CI-safe)
+      - name: Show and repair android/app/build.gradle around Hermes/JSC block
         script: |
           set -e
-          echo "🧯 Disabling Flipper (dependency lines only)..."
-
           APP_GRADLE="android/app/build.gradle"
-          if [ ! -f "$APP_GRADLE" ]; then
-            echo "❌ $APP_GRADLE not found"
-            exit 1
-          fi
+          echo "🔍 Showing lines 90–140 of android/app/build.gradle (pre-repair):"
+          nl -ba "$APP_GRADLE" | sed -n '90,140p' || true
 
-          echo "🔍 Flipper lines BEFORE:"
-          grep -n "com.facebook.flipper" "$APP_GRADLE" || true
+          # If the file contains the common Hermes/JSC block but it's malformed, repair it.
+          # This targets the typical spot that triggers the exact parse error you pasted.
+          #
+          # Replace any broken occurrence of:
+          #   { implementation jscFlavor }
+          # with the correct else block:
+          #   else { implementation jscFlavor }
+          #
+          # (We only touch the minimal pattern that causes the Groovy parser to choke.)
+          perl -0777 -i -pe 's/\n\s*\{\s*\n\s*implementation\s+jscFlavor\s*\n\s*\}\s*\n\s*\}/\n    else {\n        implementation jscFlavor\n    }\n}/gs' "$APP_GRADLE"
 
-          # Remove only the Flipper dependency lines (do NOT delete generic words like 'Flipper' or braces)
-          # Covers both styles: debugImplementation("...") and debugImplementation(...)
-          sed -i '/debugImplementation.*com\.facebook\.flipper:flipper/d' "$APP_GRADLE"
-          sed -i '/debugImplementation.*com\.facebook\.flipper:flipper-network-plugin/d' "$APP_GRADLE"
-          sed -i '/debugImplementation.*com\.facebook\.flipper:flipper-fresco-plugin/d' "$APP_GRADLE"
-          sed -i '/debugImplementation.*com\.facebook\.flipper:flipper-noop/d' "$APP_GRADLE"
+          echo "🔍 Showing lines 90–140 of android/app/build.gradle (post-repair):"
+          nl -ba "$APP_GRADLE" | sed -n '90,140p' || true
 
-          echo "🔍 Flipper lines AFTER:"
-          grep -n "com.facebook.flipper" "$APP_GRADLE" || true
+      - name: Disable Flipper dependencies safely (no brace edits)
+        script: |
+          set -e
+          APP_GRADLE="android/app/build.gradle"
+          echo "🧯 Removing only Flipper dependency lines (no structural edits)..."
 
-          # If the generated template includes ReactNativeFlipper init, remove it safely.
-          # (May not exist depending on template version.)
-          MAIN_APP_JAVA=$(find android/app/src/main/java -name "MainApplication.java" 2>/dev/null | head -n 1 || true)
-          MAIN_APP_KT=$(find android/app/src/main/java -name "MainApplication.kt" 2>/dev/null | head -n 1 || true)
+          # Remove only dependency lines that reference com.facebook.flipper
+          sed -i '/debugImplementation.*com\.facebook\.flipper:/d' "$APP_GRADLE"
+          sed -i '/releaseImplementation.*com\.facebook\.flipper:/d' "$APP_GRADLE"
 
-          if [ -n "$MAIN_APP_JAVA" ]; then
-            if grep -q "ReactNativeFlipper" "$MAIN_APP_JAVA"; then
-              echo "🧼 Removing ReactNativeFlipper references in $MAIN_APP_JAVA"
-              sed -i '/ReactNativeFlipper/d' "$MAIN_APP_JAVA"
-              # remove the common initializeFlipper(...) call line if present
-              sed -i '/initializeFlipper/d' "$MAIN_APP_JAVA"
-            fi
-          fi
-
-          if [ -n "$MAIN_APP_KT" ]; then
-            if grep -q "ReactNativeFlipper" "$MAIN_APP_KT"; then
-              echo "🧼 Removing ReactNativeFlipper references in $MAIN_APP_KT"
-              sed -i '/ReactNativeFlipper/d' "$MAIN_APP_KT"
-              sed -i '/initializeFlipper/d' "$MAIN_APP_KT"
-            fi
-          fi
-
-          echo "✅ Flipper disabled safely"
+          echo "✅ Flipper dependency lines removed (if any)"
 
       - name: Build Debug APK
         script: |
