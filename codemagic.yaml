@@ -1,6 +1,6 @@
 workflows:
   android-apk:
-    name: Android APK (Fresh RN Android each build)
+    name: Android APK (Repair Gradle + Build)
     max_build_duration: 60
     instance_type: linux_x2
 
@@ -22,16 +22,14 @@ workflows:
       - name: Generate fresh Android project
         script: |
           set -e
-          echo "🧼 Forcing a fresh generated android/ each build..."
+          echo "🧼 Forcing fresh android/ each build..."
           rm -rf android ios KegBatchScannerTemp
 
           echo "📱 Creating RN template project (0.72.10)..."
           npx react-native@0.72.10 init KegBatchScannerTemp --version 0.72.10 --skip-install
 
-          echo "✅ Copying android/ into workspace..."
           cp -R KegBatchScannerTemp/android .
           rm -rf KegBatchScannerTemp
-
           echo "✅ android/ generated"
 
       - name: Install JS dependencies
@@ -44,19 +42,17 @@ workflows:
         script: |
           set -e
           echo "🔧 Configuring Android build..."
-
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
 
           mkdir -p android/app/src/main
           if [ -f "AndroidManifest.xml" ]; then
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-            echo "✅ Copied root AndroidManifest.xml into android/app/src/main/"
+            echo "✅ Copied AndroidManifest.xml into android/app/src/main/"
           else
             echo "❌ AndroidManifest.xml not found at repo root"
             exit 1
           fi
 
-          # Write SAFE gradle.properties (NO MaxPermSize)
           cat > android/gradle.properties << 'EOF'
           org.gradle.jvmargs=-Xmx4g -Dkotlin.daemon.jvm.options=-Xmx2g
           org.gradle.parallel=true
@@ -72,38 +68,58 @@ workflows:
 
           echo "✅ android/gradle.properties written"
 
-      - name: Show and repair android/app/build.gradle around Hermes/JSC block
+      - name: Repair Hermes/JSC block in android/app/build.gradle
         script: |
           set -e
           APP_GRADLE="android/app/build.gradle"
-          echo "🔍 Showing lines 90–140 of android/app/build.gradle (pre-repair):"
-          nl -ba "$APP_GRADLE" | sed -n '90,140p' || true
 
-          # If the file contains the common Hermes/JSC block but it's malformed, repair it.
-          # This targets the typical spot that triggers the exact parse error you pasted.
+          echo "🔍 Showing lines 95–135 BEFORE repair:"
+          nl -ba "$APP_GRADLE" | sed -n '95,135p' || true
+
+          # 1) Remove ANY existing broken hermes/jsc conditional block variants
+          #    We delete from the start of the hermesEnabled if-block up to the next closing brace that ends it.
+          #    Then we insert a known-good block.
           #
-          # Replace any broken occurrence of:
-          #   { implementation jscFlavor }
-          # with the correct else block:
-          #   else { implementation jscFlavor }
+          # Known-good snippet:
+          # if (hermesEnabled.toBoolean()) {
+          #     implementation("com.facebook.react:hermes-android")
+          # } else {
+          #     implementation jscFlavor
+          # }
           #
-          # (We only touch the minimal pattern that causes the Groovy parser to choke.)
-          perl -0777 -i -pe 's/\n\s*\{\s*\n\s*implementation\s+jscFlavor\s*\n\s*\}\s*\n\s*\}/\n    else {\n        implementation jscFlavor\n    }\n}/gs' "$APP_GRADLE"
+          perl -0777 -i -pe '
+            # Delete any existing hermesEnabled conditional (even if malformed)
+            s/\n\s*if\s*\(\s*hermesEnabled\.toBoolean\(\)\s*\)\s*\{[\s\S]*?\n\s*\}\s*//g;
 
-          echo "🔍 Showing lines 90–140 of android/app/build.gradle (post-repair):"
-          nl -ba "$APP_GRADLE" | sed -n '90,140p' || true
+            # Also delete the common malformed standalone jscFlavor block: "{ implementation jscFlavor }"
+            s/\n\s*\{\s*\n\s*implementation\s+jscFlavor\s*\n\s*\}\s*//g;
+          ' "$APP_GRADLE"
 
-      - name: Disable Flipper dependencies safely (no brace edits)
+          # 2) Insert the known-good conditional right after the line defining jscFlavor
+          #    (This keeps it inside dependencies {} where templates expect it.)
+          perl -i -pe '
+            if (!$done && $_ =~ /def\s+jscFlavor\s*=/) {
+              $done=1;
+              $_ .= "\n// ✅ CI Repair: ensure Hermes/JSC dependency block is valid Groovy\n";
+              $_ .= "if (hermesEnabled.toBoolean()) {\n";
+              $_ .= "    implementation(\"com.facebook.react:hermes-android\")\n";
+              $_ .= "} else {\n";
+              $_ .= "    implementation jscFlavor\n";
+              $_ .= "}\n";
+            }
+          ' "$APP_GRADLE"
+
+          echo "🔍 Showing lines 95–135 AFTER repair:"
+          nl -ba "$APP_GRADLE" | sed -n '95,135p' || true
+
+      - name: Disable Flipper dependencies safely
         script: |
           set -e
           APP_GRADLE="android/app/build.gradle"
-          echo "🧯 Removing only Flipper dependency lines (no structural edits)..."
-
-          # Remove only dependency lines that reference com.facebook.flipper
+          echo "🧯 Removing Flipper dependency lines only..."
           sed -i '/debugImplementation.*com\.facebook\.flipper:/d' "$APP_GRADLE"
           sed -i '/releaseImplementation.*com\.facebook\.flipper:/d' "$APP_GRADLE"
-
-          echo "✅ Flipper dependency lines removed (if any)"
+          echo "✅ Flipper lines removed (if present)"
 
       - name: Build Debug APK
         script: |
