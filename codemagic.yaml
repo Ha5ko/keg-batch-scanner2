@@ -1,12 +1,10 @@
 workflows:
   android-keg-scanner:
-    name: Keg Scanner Android Build (APK)
+    name: Keg Batch Scanner (Android APK)
     max_build_duration: 60
     instance_type: linux_x2
 
     environment:
-      vars:
-        PACKAGE_NAME: "com.kegbatchscanner"
       node: 18
       java: 11
 
@@ -24,16 +22,13 @@ workflows:
       - name: Generate Android project (only if missing)
         script: |
           set -e
-          echo "🚀 Checking Android folder..."
+          echo "🔎 Checking for android/ folder..."
           if [ ! -d "android" ]; then
-            echo "📱 android/ not found, generating RN template..."
+            echo "📱 android/ not found. Generating RN template android project..."
             npx react-native@0.72.10 init KegBatchScannerTemp --version 0.72.10 --skip-install
 
-            echo "✅ Copying generated android/ into repo workspace..."
+            echo "✅ Copying generated android/ into workspace..."
             cp -R KegBatchScannerTemp/android .
-
-            # Optional: if you ever want iOS later, uncomment:
-            # cp -R KegBatchScannerTemp/ios .
 
             rm -rf KegBatchScannerTemp
           else
@@ -43,32 +38,30 @@ workflows:
       - name: Install JS dependencies
         script: |
           set -e
-          echo "📦 Installing npm dependencies..."
+          echo "📦 Installing dependencies..."
           npm install --legacy-peer-deps
 
-      - name: Configure Android SDK + manifest + gradle.properties
+      - name: Configure Android SDK + Manifest + Gradle properties
         script: |
           set -e
-          echo "🔧 Configuring Android build environment..."
+          echo "🔧 Configuring Android build..."
 
-          # Ensure local.properties points to the Android SDK
+          # Point Gradle at the Android SDK
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
-          echo "✅ android/local.properties set to $ANDROID_SDK_ROOT"
 
           # Ensure manifest folder exists
           mkdir -p android/app/src/main
 
-          # Copy custom manifest (from repo root) into Android project
+          # Copy your custom manifest into the generated Android project
           if [ -f "AndroidManifest.xml" ]; then
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-            echo "✅ Custom AndroidManifest.xml copied"
+            echo "✅ Copied AndroidManifest.xml into android/app/src/main/"
           else
             echo "❌ AndroidManifest.xml not found at repo root"
             exit 1
           fi
 
-          # Write SAFE gradle.properties (overwrite / ensure our settings exist)
-          # Important: NO MaxPermSize (breaks modern Java)
+          # Write SAFE gradle.properties (NO MaxPermSize) + define FLIPPER_VERSION
           cat > android/gradle.properties << 'EOF'
           org.gradle.jvmargs=-Xmx4g -Dkotlin.daemon.jvm.options=-Xmx2g
           org.gradle.parallel=true
@@ -78,44 +71,27 @@ workflows:
           android.useAndroidX=true
           android.enableJetifier=true
 
-          # React Native New Architecture (keep OFF for reliability)
+          # React Native
           newArchEnabled=false
-
-          # Hermes
           hermesEnabled=true
+
+          # ✅ Fix for Codemagic failure:
+          # RN template app/build.gradle references FLIPPER_VERSION
+          FLIPPER_VERSION=0.201.0
           EOF
 
-          echo "✅ android/gradle.properties written"
-          echo "📋 android/gradle.properties:"
+          echo "✅ android/gradle.properties written:"
           cat android/gradle.properties
 
-      - name: Build Debug APK (primary)
+      - name: Build Debug APK
         script: |
           set -e
-          echo "🔨 Building Debug APK..."
           cd android
           chmod +x ./gradlew
           ./gradlew --version
           ./gradlew clean
           ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Attempt Release APK (optional)
-        script: |
-          set +e
-          echo "🔨 Attempting Release APK..."
-          cd android
-          ./gradlew assembleRelease --no-daemon --stacktrace
-          exit 0
-
     artifacts:
       - android/app/build/outputs/**/*.apk
       - android/app/build/reports/**
-      - android/app/build/outputs/**/mapping.txt
-
-    publishing:
-      email:
-        recipients:
-          - shantu.hasko@ab-inbev.com
-        notify:
-          success: true
-          failure: true
