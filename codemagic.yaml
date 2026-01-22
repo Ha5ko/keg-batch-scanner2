@@ -1,252 +1,117 @@
 workflows:
   android-keg-scanner:
-    name: Keg Scanner Android Build
+    name: Keg Scanner Android Build (APK)
     max_build_duration: 60
-    instance_type: mac_mini_m1
+    instance_type: linux_x2
+
     environment:
       vars:
         PACKAGE_NAME: "com.kegbatchscanner"
-      node: 16
-      xcode: latest
+      node: 18
+      java: 11
+
     triggering:
       events:
         - push
-        - tag
         - pull_request
+        - tag
       branch_patterns:
         - pattern: main
           include: true
           source: true
+
     scripts:
-      - name: Initialize React Native Project
+      - name: Generate Android project (only if missing)
         script: |
-          echo "🚀 Setting up React Native project structure..."
-          
-          # Check if we already have a React Native project
+          set -e
+          echo "🚀 Checking Android folder..."
           if [ ! -d "android" ]; then
-            echo "📱 Creating React Native project..."
-            
-            # Create a fresh React Native project
-            npx react-native@0.72.10 init KegBatchScannerTemp --version 0.72.10
-            
-            # Copy the generated android and ios folders to our project
-            if [ -d "KegBatchScannerTemp/android" ]; then
-              cp -r KegBatchScannerTemp/android .
-              echo "✅ Android project structure copied"
-            fi
-            
-            if [ -d "KegBatchScannerTemp/ios" ]; then
-              cp -r KegBatchScannerTemp/ios .
-              echo "✅ iOS project structure copied"
-            fi
-            
-            # Clean up temporary project
+            echo "📱 android/ not found, generating RN template..."
+            npx react-native@0.72.10 init KegBatchScannerTemp --version 0.72.10 --skip-install
+
+            echo "✅ Copying generated android/ into repo workspace..."
+            cp -R KegBatchScannerTemp/android .
+
+            # Optional: if you ever want iOS later, uncomment:
+            # cp -R KegBatchScannerTemp/ios .
+
             rm -rf KegBatchScannerTemp
           else
-            echo "✅ Android directory already exists"
+            echo "✅ android/ already exists"
           fi
-      - name: Install npm dependencies
+
+      - name: Install JS dependencies
         script: |
-          echo "📦 Installing dependencies..."
+          set -e
+          echo "📦 Installing npm dependencies..."
           npm install --legacy-peer-deps
-      - name: Set up Android environment
+
+      - name: Configure Android SDK + manifest + gradle.properties
         script: |
-          echo "🔧 Setting up Android environment..."
-          
-          # Ensure android directory exists
-          if [ ! -d "android" ]; then
-            echo "❌ Android directory missing after setup!"
-            exit 1
-          fi
-          
-          # Set up local.properties
+          set -e
+          echo "🔧 Configuring Android build environment..."
+
+          # Ensure local.properties points to the Android SDK
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
-          echo "✅ Android SDK path configured: $ANDROID_SDK_ROOT"
-          
-          # Verify Android SDK is accessible
-          if [ -d "$ANDROID_SDK_ROOT" ]; then
-            echo "✅ Android SDK found at: $ANDROID_SDK_ROOT"
-            ls -la "$ANDROID_SDK_ROOT" | head -5
-          else
-            echo "⚠️ Android SDK directory not found!"
-          fi
-      - name: Copy Android Manifest and configure permissions
-        script: |
-          echo "📄 Setting up Android manifest and permissions..."
-          
-          # Ensure the manifest directory exists
+          echo "✅ android/local.properties set to $ANDROID_SDK_ROOT"
+
+          # Ensure manifest folder exists
           mkdir -p android/app/src/main
-          
-          # Copy our custom manifest with camera permissions
+
+          # Copy custom manifest (from repo root) into Android project
           if [ -f "AndroidManifest.xml" ]; then
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-            echo "✅ Custom Android manifest with camera permissions copied"
+            echo "✅ Custom AndroidManifest.xml copied"
           else
-            echo "⚠️ AndroidManifest.xml not found, using default"
+            echo "❌ AndroidManifest.xml not found at repo root"
+            exit 1
           fi
-          
-          # Verify manifest exists
-          if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
-            echo "✅ AndroidManifest.xml is in place"
-            # Show relevant permissions
-            grep -n "CAMERA\|camera" android/app/src/main/AndroidManifest.xml || echo "⚠️ Camera permissions not found in manifest"
-          else
-            echo "❌ AndroidManifest.xml missing!"
-          fi
-      - name: Set up Gradle properties
-        script: |
-          echo "⚙️ Configuring Gradle properties..."
-          
-          # Add optimized gradle properties
-          cat >> android/gradle.properties << EOF
-          
-          # React Native optimizations
-          org.gradle.jvmargs=-Xmx4096m -XX:MaxPermSize=512m -XX:+UseParallelGC
+
+          # Write SAFE gradle.properties (overwrite / ensure our settings exist)
+          # Important: NO MaxPermSize (breaks modern Java)
+          cat > android/gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx4g -Dkotlin.daemon.jvm.options=-Xmx2g
           org.gradle.parallel=true
-          org.gradle.configureondemand=true
           org.gradle.daemon=true
-          
-          # Android build optimizations
+          org.gradle.configureondemand=true
+
           android.useAndroidX=true
           android.enableJetifier=true
-          android.enableR8=true
-          
-          # Vision Camera
-          disableNewArchitecture=false
-          
-          # Flipper
-          FLIPPER_VERSION=0.125.0
+
+          # React Native New Architecture (keep OFF for reliability)
+          newArchEnabled=false
+
+          # Hermes
+          hermesEnabled=true
           EOF
-          echo "✅ Gradle properties configured"
-          
-          echo "📋 Final gradle.properties content:"
+
+          echo "✅ android/gradle.properties written"
+          echo "📋 android/gradle.properties:"
           cat android/gradle.properties
-      - name: Pre-build verification
+
+      - name: Build Debug APK (primary)
         script: |
-          echo "🔍 Pre-build verification..."
-          
-          # Check key files exist
-          echo "=== Key files check ==="
-          [ -f "package.json" ] && echo "✅ package.json" || echo "❌ package.json missing"
-          [ -f "App.js" ] && echo "✅ App.js" || echo "❌ App.js missing"
-          [ -f "android/build.gradle" ] && echo "✅ android/build.gradle" || echo "❌ android/build.gradle missing"
-          [ -f "android/app/build.gradle" ] && echo "✅ android/app/build.gradle" || echo "❌ android/app/build.gradle missing"
-          [ -f "android/local.properties" ] && echo "✅ android/local.properties" || echo "❌ android/local.properties missing"
-          
-          # Show gradle wrapper version
-          echo "=== Gradle wrapper version ==="
-          cd android && ./gradlew --version | head -10
-      - name: Clean and build Android APK
-        script: |
-          echo "🔨 Building Android APK with detailed logging..."
+          set -e
+          echo "🔨 Building Debug APK..."
           cd android
-          
-          # Show available gradle tasks for debugging
-          echo "📋 Available assemble tasks:"
-          ./gradlew tasks | grep -i assemble
-          
-          # Clean previous builds
-          echo "🧹 Cleaning previous builds..."
-          ./gradlew clean --stacktrace
-          
-          # Build debug APK with maximum verbosity
-          echo "🔨 Building debug APK with full logging..."
-          ./gradlew assembleDebug --stacktrace --info --debug > ../build-debug.log 2>&1 || {
-            echo "❌ Debug build failed. Last 50 lines of log:"
-            tail -50 ../build-debug.log
-            echo "❌ Debug build failed, but continuing..."
-          }
-          
-          # Check if debug APK was created
-          if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
-            echo "✅ Debug APK created successfully!"
-            ls -lh app/build/outputs/apk/debug/app-debug.apk
-          else
-            echo "❌ Debug APK not created"
-            echo "Checking debug outputs directory:"
-            ls -la app/build/outputs/apk/debug/ 2>/dev/null || echo "Debug output directory doesn't exist"
-          fi
-          
-          # Try release build (might fail without keystore)
-          echo "🔨 Attempting release APK..."
-          ./gradlew assembleRelease --stacktrace > ../build-release.log 2>&1 || {
-            echo "⚠️ Release build failed (expected without keystore)"
-            echo "Last 20 lines of release build log:"
-            tail -20 ../build-release.log
-          }
-          
-          # Check if release APK was created
-          if [ -f "app/build/outputs/apk/release/app-release-unsigned.apk" ] || [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
-            echo "✅ Release APK created!"
-            ls -lh app/build/outputs/apk/release/*.apk 2>/dev/null
-          fi
-      - name: Debug build outputs
+          chmod +x ./gradlew
+          ./gradlew --version
+          ./gradlew clean
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Attempt Release APK (optional)
         script: |
-          echo "🔍 Detailed build outputs investigation..."
-          
-          # Show complete outputs directory structure
-          echo "=== Complete outputs directory structure ==="
-          find android/app/build/outputs -type f 2>/dev/null | head -20 || echo "No files found in outputs"
-          
-          # Show all directories under build
-          echo "=== Build directory structure ==="
-          find android/app/build -type d -name "*apk*" 2>/dev/null || echo "No APK directories found"
-          
-          # Look for any generated files
-          echo "=== Any .apk files anywhere ==="
-          find android -name "*.apk" -type f 2>/dev/null || echo "No APK files found anywhere"
-          
-          # Check build logs for errors
-          echo "=== Build error patterns ==="
-          grep -i "error\|failed\|exception" ../build-debug.log | tail -10 || echo "No obvious errors in debug log"
-          
-          # Show gradle build cache info
-          echo "=== Gradle build info ==="
-          cd android && ./gradlew --status || echo "Could not get gradle status"
-      - name: Verify and list APKs
-        script: |
-          echo "📱 Final APK verification..."
-          
-          # Search for all APK files recursively
-          echo "=== All APK files found ==="
-          find . -name "*.apk" -type f -exec ls -lh {} \; 2>/dev/null || echo "No APK files found anywhere"
-          
-          # Check specific common locations
-          APK_LOCATIONS=(
-            "android/app/build/outputs/apk/debug/app-debug.apk"
-            "android/app/build/outputs/apk/release/app-release.apk"
-            "android/app/build/outputs/apk/release/app-release-unsigned.apk"
-          )
-          
-          FOUND_APKS=0
-          for apk in "${APK_LOCATIONS[@]}"; do
-            if [ -f "$apk" ]; then
-              echo "✅ Found: $apk"
-              ls -lh "$apk"
-              FOUND_APKS=$((FOUND_APKS + 1))
-            else
-              echo "❌ Missing: $apk"
-            fi
-          done
-          
-          if [ $FOUND_APKS -gt 0 ]; then
-            echo "🎉 Success! Found $FOUND_APKS APK file(s)"
-            exit 0
-          else
-            echo "❌ No APK files generated!"
-            echo "=== Final diagnosis ==="
-            echo "Build directory contents:"
-            ls -la android/app/build/ 2>/dev/null || echo "Build directory not found"
-            echo "=== This indicates a build failure. Check logs above. ==="
-            # Don't exit 1 here so we can still get artifacts
-            echo "Continuing to generate artifacts for debugging..."
-          fi
+          set +e
+          echo "🔨 Attempting Release APK..."
+          cd android
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          exit 0
+
     artifacts:
       - android/app/build/outputs/**/*.apk
-      - android/app/build/outputs/**/mapping.txt
       - android/app/build/reports/**
-      - build-debug.log
-      - build-release.log
+      - android/app/build/outputs/**/mapping.txt
+
     publishing:
       email:
         recipients:
