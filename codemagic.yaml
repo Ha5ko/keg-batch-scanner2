@@ -71,10 +71,10 @@ workflows:
 
           echo "✅ android/gradle.properties written"
 
-      - name: Disable Flipper in generated Android project (CI-safe)
+      - name: Disable Flipper (surgical, CI-safe)
         script: |
           set -e
-          echo "🧯 Disabling Flipper to avoid dependency resolution issues..."
+          echo "🧯 Disabling Flipper (dependency lines only)..."
 
           APP_GRADLE="android/app/build.gradle"
           if [ ! -f "$APP_GRADLE" ]; then
@@ -82,40 +82,42 @@ workflows:
             exit 1
           fi
 
-          echo "🔍 Before patch, Flipper lines:"
-          grep -n "flipper" -i "$APP_GRADLE" || true
+          echo "🔍 Flipper lines BEFORE:"
+          grep -n "com.facebook.flipper" "$APP_GRADLE" || true
 
-          # Remove any flipper dependencies (fresco/network/soloader/etc)
-          # This is safe even if the lines don't exist.
-          sed -i '/com\.facebook\.flipper/d' "$APP_GRADLE"
-          sed -i '/flipper-/Id' "$APP_GRADLE"
-          sed -i '/SoLoader/Id' "$APP_GRADLE"
-          sed -i '/Flipper/Id' "$APP_GRADLE"
+          # Remove only the Flipper dependency lines (do NOT delete generic words like 'Flipper' or braces)
+          # Covers both styles: debugImplementation("...") and debugImplementation(...)
+          sed -i '/debugImplementation.*com\.facebook\.flipper:flipper/d' "$APP_GRADLE"
+          sed -i '/debugImplementation.*com\.facebook\.flipper:flipper-network-plugin/d' "$APP_GRADLE"
+          sed -i '/debugImplementation.*com\.facebook\.flipper:flipper-fresco-plugin/d' "$APP_GRADLE"
+          sed -i '/debugImplementation.*com\.facebook\.flipper:flipper-noop/d' "$APP_GRADLE"
 
-          echo "✅ Patched android/app/build.gradle"
-          echo "🔍 After patch, Flipper lines:"
-          grep -n "flipper" -i "$APP_GRADLE" || true
+          echo "🔍 Flipper lines AFTER:"
+          grep -n "com.facebook.flipper" "$APP_GRADLE" || true
 
-          # Also patch MainApplication if the template enables Flipper initialization
-          # Handles both Java and Kotlin templates.
+          # If the generated template includes ReactNativeFlipper init, remove it safely.
+          # (May not exist depending on template version.)
           MAIN_APP_JAVA=$(find android/app/src/main/java -name "MainApplication.java" 2>/dev/null | head -n 1 || true)
           MAIN_APP_KT=$(find android/app/src/main/java -name "MainApplication.kt" 2>/dev/null | head -n 1 || true)
 
           if [ -n "$MAIN_APP_JAVA" ]; then
-            echo "🧼 Patching Flipper init in $MAIN_APP_JAVA"
-            # Remove ReactNativeFlipper import + init call blocks if present
-            sed -i '/ReactNativeFlipper/d' "$MAIN_APP_JAVA"
-            # Remove block that calls ReactNativeFlipper.initializeFlipper(...)
-            perl -0777 -i -pe 's/\n\s*if\s*\(BuildConfig\.DEBUG\)\s*\{\s*\n\s*ReactNativeFlipper\.initializeFlipper\([\s\S]*?\);\s*\n\s*\}\s*\n/\n/gs' "$MAIN_APP_JAVA"
+            if grep -q "ReactNativeFlipper" "$MAIN_APP_JAVA"; then
+              echo "🧼 Removing ReactNativeFlipper references in $MAIN_APP_JAVA"
+              sed -i '/ReactNativeFlipper/d' "$MAIN_APP_JAVA"
+              # remove the common initializeFlipper(...) call line if present
+              sed -i '/initializeFlipper/d' "$MAIN_APP_JAVA"
+            fi
           fi
 
           if [ -n "$MAIN_APP_KT" ]; then
-            echo "🧼 Patching Flipper init in $MAIN_APP_KT"
-            sed -i '/ReactNativeFlipper/d' "$MAIN_APP_KT"
-            perl -0777 -i -pe 's/\n\s*if\s*\(BuildConfig\.DEBUG\)\s*\{\s*\n\s*ReactNativeFlipper\.initializeFlipper\([\s\S]*?\)\s*\n\s*\}\s*\n/\n/gs' "$MAIN_APP_KT"
+            if grep -q "ReactNativeFlipper" "$MAIN_APP_KT"; then
+              echo "🧼 Removing ReactNativeFlipper references in $MAIN_APP_KT"
+              sed -i '/ReactNativeFlipper/d' "$MAIN_APP_KT"
+              sed -i '/initializeFlipper/d' "$MAIN_APP_KT"
+            fi
           fi
 
-          echo "✅ Flipper disabled"
+          echo "✅ Flipper disabled safely"
 
       - name: Build Debug APK
         script: |
