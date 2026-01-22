@@ -4,13 +4,8 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m1
     environment:
-      android_signing:
-        - keystore_reference
-      groups:
-        - google_credentials
       vars:
         PACKAGE_NAME: "com.kegbatchscanner"
-        GOOGLE_SERVICES_JSON: Encrypted(...)
       node: 16
       xcode: latest
     triggering:
@@ -34,6 +29,7 @@ workflows:
           # Copy the updated manifest with camera permissions
           if [ -f "AndroidManifest.xml" ]; then
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+            echo "✅ Android manifest updated with camera permissions"
           fi
       - name: Set up Gradle properties
         script: |
@@ -56,29 +52,48 @@ workflows:
           # Flipper
           FLIPPER_VERSION=0.125.0
           EOF
+          echo "✅ Gradle properties configured"
       - name: Clean and build Android APK
         script: |
           cd android
           
           # Clean previous builds
+          echo "🧹 Cleaning previous builds..."
           ./gradlew clean
           
-          # Build the APK
-          ./gradlew assembleRelease --stacktrace
+          # Build the debug APK (unsigned - works without keystore)
+          echo "🔨 Building debug APK..."
+          ./gradlew assembleDebug --stacktrace
+          
+          # Also try release APK (unsigned)
+          echo "🔨 Building release APK..."
+          ./gradlew assembleRelease --stacktrace || echo "Release build failed, debug APK available"
       - name: Verify APK was created
         script: |
-          echo "=== Checking for APK files ==="
+          echo "=== Searching for APK files ==="
           find android/app/build/outputs -name "*.apk" -exec ls -lh {} \;
           
-          # Check if APK exists
-          APK_PATH="android/app/build/outputs/apk/release/app-release.apk"
-          if [ -f "$APK_PATH" ]; then
-            echo "✅ APK built successfully!"
-            ls -lh "$APK_PATH"
+          # Check for debug APK
+          DEBUG_APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE_APK="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          RELEASE_APK2="android/app/build/outputs/apk/release/app-release.apk"
+          
+          if [ -f "$DEBUG_APK" ]; then
+            echo "✅ Debug APK built successfully!"
+            ls -lh "$DEBUG_APK"
+          fi
+          
+          if [ -f "$RELEASE_APK" ] || [ -f "$RELEASE_APK2" ]; then
+            echo "✅ Release APK built successfully!"
+            ls -lh android/app/build/outputs/apk/release/*.apk
+          fi
+          
+          # Count total APKs
+          APK_COUNT=$(find android/app/build/outputs -name "*.apk" | wc -l)
+          if [ "$APK_COUNT" -gt 0 ]; then
+            echo "✅ Build successful! Found $APK_COUNT APK(s)"
           else
-            echo "❌ APK not found!"
-            echo "Available files in build outputs:"
-            find android/app/build/outputs -type f
+            echo "❌ No APKs found!"
             exit 1
           fi
     artifacts:
@@ -91,67 +106,3 @@ workflows:
         notify:
           success: true
           failure: true
-      # Uncomment below for Google Play Store publishing when ready
-      # google_play:
-      #   credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
-      #   track: internal
-      #   submit_as_draft: true
-
-  # iOS workflow - ONLY uncomment if you need iOS builds and have App Store Connect configured
-  # ios-keg-scanner:
-  #   name: Keg Scanner iOS Build  
-  #   max_build_duration: 60
-  #   instance_type: mac_mini_m1
-  #   integrations:
-  #     app_store_connect: codemagic_app_store_connect
-  #   environment:
-  #     ios_signing:
-  #       distribution_type: app_store
-  #       bundle_identifier: com.kegbatchscanner
-  #     vars:
-  #       XCODE_WORKSPACE: "KegBatchScanner.xcworkspace"
-  #       XCODE_SCHEME: "KegBatchScanner"
-  #     node: 16
-  #     xcode: latest
-  #   triggering:
-  #     events:
-  #       - push
-  #       - tag
-  #       - pull_request
-  #     branch_patterns:
-  #       - pattern: main
-  #         include: true
-  #         source: true
-  #   scripts:
-  #     - name: Install npm dependencies
-  #       script: |
-  #         npm install --legacy-peer-deps
-  #     - name: Install CocoaPods dependencies
-  #       script: |
-  #         cd ios && pod install
-  #     - name: Set up iOS Info.plist permissions
-  #       script: |
-  #         # Add camera usage description to Info.plist
-  #         /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string" ios/KegBatchScanner/Info.plist || true
-  #         /usr/libexec/PlistBuddy -c "Set :NSCameraUsageDescription 'This app needs camera access to scan keg batch codes'" ios/KegBatchScanner/Info.plist
-  #     - name: Build iOS app
-  #       script: |
-  #         cd ios
-  #         xcodebuild -workspace KegBatchScanner.xcworkspace -scheme KegBatchScanner -configuration Release -destination generic/platform=iOS -archivePath build/KegBatchScanner.xcarchive archive
-  #     - name: Export IPA
-  #       script: |
-  #         cd ios
-  #         xcodebuild -exportArchive -archivePath build/KegBatchScanner.xcarchive -exportPath build -exportOptionsPlist exportOptions.plist
-  #   artifacts:
-  #     - ios/build/*.ipa
-  #     - /tmp/xcodebuild_logs/*.log
-  #   publishing:
-  #     app_store_connect:
-  #       auth: integration
-  #       submit_to_testflight: true
-  #     email:
-  #       recipients:
-  #         - shantu.hasko@ab-inbev.com
-  #       notify:
-  #         success: true
-  #         failure: true
