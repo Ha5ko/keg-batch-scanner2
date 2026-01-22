@@ -156,6 +156,7 @@ const App = () => {
     lastProcessedTime.current = now;
 
     try {
+      // Use the correct ML Kit 2.0.0 API
       const result = await TextRecognition.recognize(imageUri);
       console.log('OCR Result:', result.text);
       
@@ -190,6 +191,10 @@ const App = () => {
       
     } catch (error) {
       console.log('OCR processing error:', error);
+      runOnJS(setLastResult)({
+        success: false,
+        message: 'Error processing image. Try again.',
+      });
     } finally {
       processingLock.current = false;
     }
@@ -211,6 +216,7 @@ const App = () => {
           message: 'Photo captured - processing...',
         });
         
+        // Process with file:// prefix for local files
         await processOCR(`file://${photo.path}`);
         
       } catch (error) {
