@@ -26,11 +26,9 @@ workflows:
           if [ ! -d "android" ]; then
             echo "📱 android/ not found. Generating RN template android project..."
             npx react-native@0.72.10 init KegBatchScannerTemp --version 0.72.10 --skip-install
-
-            echo "✅ Copying generated android/ into workspace..."
             cp -R KegBatchScannerTemp/android .
-
             rm -rf KegBatchScannerTemp
+            echo "✅ android/ generated"
           else
             echo "✅ android/ already exists"
           fi
@@ -46,13 +44,9 @@ workflows:
           set -e
           echo "🔧 Configuring Android build..."
 
-          # Point Gradle at the Android SDK
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
-
-          # Ensure manifest folder exists
           mkdir -p android/app/src/main
 
-          # Copy your custom manifest into the generated Android project
           if [ -f "AndroidManifest.xml" ]; then
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
             echo "✅ Copied AndroidManifest.xml into android/app/src/main/"
@@ -61,7 +55,7 @@ workflows:
             exit 1
           fi
 
-          # Write SAFE gradle.properties (NO MaxPermSize) + define FLIPPER_VERSION
+          # SAFE gradle.properties (NO MaxPermSize)
           cat > android/gradle.properties << 'EOF'
           org.gradle.jvmargs=-Xmx4g -Dkotlin.daemon.jvm.options=-Xmx2g
           org.gradle.parallel=true
@@ -71,17 +65,57 @@ workflows:
           android.useAndroidX=true
           android.enableJetifier=true
 
-          # React Native
           newArchEnabled=false
           hermesEnabled=true
-
-          # ✅ Fix for Codemagic failure:
-          # RN template app/build.gradle references FLIPPER_VERSION
-          FLIPPER_VERSION=0.201.0
           EOF
 
-          echo "✅ android/gradle.properties written:"
-          cat android/gradle.properties
+          echo "✅ android/gradle.properties written"
+
+      - name: Disable Flipper in generated Android project (CI-safe)
+        script: |
+          set -e
+          echo "🧯 Disabling Flipper to avoid dependency resolution issues..."
+
+          APP_GRADLE="android/app/build.gradle"
+          if [ ! -f "$APP_GRADLE" ]; then
+            echo "❌ $APP_GRADLE not found"
+            exit 1
+          fi
+
+          echo "🔍 Before patch, Flipper lines:"
+          grep -n "flipper" -i "$APP_GRADLE" || true
+
+          # Remove any flipper dependencies (fresco/network/soloader/etc)
+          # This is safe even if the lines don't exist.
+          sed -i '/com\.facebook\.flipper/d' "$APP_GRADLE"
+          sed -i '/flipper-/Id' "$APP_GRADLE"
+          sed -i '/SoLoader/Id' "$APP_GRADLE"
+          sed -i '/Flipper/Id' "$APP_GRADLE"
+
+          echo "✅ Patched android/app/build.gradle"
+          echo "🔍 After patch, Flipper lines:"
+          grep -n "flipper" -i "$APP_GRADLE" || true
+
+          # Also patch MainApplication if the template enables Flipper initialization
+          # Handles both Java and Kotlin templates.
+          MAIN_APP_JAVA=$(find android/app/src/main/java -name "MainApplication.java" 2>/dev/null | head -n 1 || true)
+          MAIN_APP_KT=$(find android/app/src/main/java -name "MainApplication.kt" 2>/dev/null | head -n 1 || true)
+
+          if [ -n "$MAIN_APP_JAVA" ]; then
+            echo "🧼 Patching Flipper init in $MAIN_APP_JAVA"
+            # Remove ReactNativeFlipper import + init call blocks if present
+            sed -i '/ReactNativeFlipper/d' "$MAIN_APP_JAVA"
+            # Remove block that calls ReactNativeFlipper.initializeFlipper(...)
+            perl -0777 -i -pe 's/\n\s*if\s*\(BuildConfig\.DEBUG\)\s*\{\s*\n\s*ReactNativeFlipper\.initializeFlipper\([\s\S]*?\);\s*\n\s*\}\s*\n/\n/gs' "$MAIN_APP_JAVA"
+          fi
+
+          if [ -n "$MAIN_APP_KT" ]; then
+            echo "🧼 Patching Flipper init in $MAIN_APP_KT"
+            sed -i '/ReactNativeFlipper/d' "$MAIN_APP_KT"
+            perl -0777 -i -pe 's/\n\s*if\s*\(BuildConfig\.DEBUG\)\s*\{\s*\n\s*ReactNativeFlipper\.initializeFlipper\([\s\S]*?\)\s*\n\s*\}\s*\n/\n/gs' "$MAIN_APP_KT"
+          fi
+
+          echo "✅ Flipper disabled"
 
       - name: Build Debug APK
         script: |
