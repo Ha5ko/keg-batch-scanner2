@@ -1,38 +1,33 @@
 #!/bin/bash
 set -e
 
-echo "🍺 Setting up Keg Batch Scanner..."
-
-if [ ! -f "package.json" ]; then
-  echo "❌ package.json not found. Run this from the project root."
-  exit 1
-fi
+echo "🍺 Keg Batch Scanner setup"
 
 echo "📦 Installing dependencies..."
 rm -rf node_modules package-lock.json
 npm install --legacy-peer-deps
 
-echo "🔧 Ensuring Android folder exists..."
+echo "🔎 Checking for android/ folder..."
 if [ ! -d "android" ]; then
-  echo "📱 android/ not found. Creating a fresh RN Android project..."
+  echo "📱 android/ not found. Generating RN template android project..."
   npx react-native@0.72.10 init KegBatchScannerTemp --version 0.72.10 --skip-install
   cp -R KegBatchScannerTemp/android .
   rm -rf KegBatchScannerTemp
-  echo "✅ android/ created"
+  echo "✅ android/ generated"
 else
   echo "✅ android/ already exists"
 fi
 
-echo "📄 Setting up Android manifest..."
+echo "📄 Copying AndroidManifest.xml into android project..."
 mkdir -p android/app/src/main
 if [ -f "AndroidManifest.xml" ]; then
   cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-  echo "✅ Android manifest copied"
+  echo "✅ Manifest copied"
 else
-  echo "⚠️ AndroidManifest.xml not found in repo root"
+  echo "⚠️ AndroidManifest.xml not found at repo root (skipping)"
 fi
 
-echo "⚙️ Writing SAFE android/gradle.properties..."
+echo "⚙️ Writing android/gradle.properties (safe + FLIPPER_VERSION)..."
 cat > android/gradle.properties << 'EOF'
 org.gradle.jvmargs=-Xmx4g -Dkotlin.daemon.jvm.options=-Xmx2g
 org.gradle.parallel=true
@@ -44,24 +39,21 @@ android.enableJetifier=true
 
 newArchEnabled=false
 hermesEnabled=true
+
+FLIPPER_VERSION=0.201.0
 EOF
 
 echo "✅ gradle.properties written"
 
 if [ -n "$ANDROID_SDK_ROOT" ]; then
   echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
-  echo "✅ Android SDK path configured"
+  echo "✅ android/local.properties set"
 else
-  echo "⚠️ ANDROID_SDK_ROOT not set. Set sdk.dir manually in android/local.properties"
+  echo "⚠️ ANDROID_SDK_ROOT not set. You may need to set sdk.dir manually."
 fi
 
-echo "🧹 Cleaning Android build..."
+echo "🧹 Gradle clean..."
 cd android
 chmod +x ./gradlew
 ./gradlew clean
-cd ..
-
-echo "🎉 Setup complete!"
-echo "Next:"
-echo "1) Update your Google Sheets webhook URL in App.js"
-echo "2) Build locally: npm run android (or cd android && ./gradlew assembleDebug)"
+echo "✅ Done"
