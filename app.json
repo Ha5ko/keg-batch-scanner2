@@ -1,0 +1,5 @@
+{
+  "name": "KegBatchScanner",
+  "displayName": "Keg Batch Scanner",
+  "description": "OCR-based keg batch code scanner with Google Sheets integration"
+}
