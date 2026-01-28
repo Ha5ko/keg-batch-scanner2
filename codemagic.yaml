@@ -1,75 +1,32 @@
 workflows:
-  react-native-android:
-    name: React Native Android - Crash-Free Build
-    max_build_duration: 120
-    instance_type: mac_mini_m1
+  android-workflow:
+    name: Android Build (APK)
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
     environment:
+      vars:
+        PACKAGE_NAME: "com.yourapp"  # optional
       android_signing:
         - keystore_reference
-      groups:
-        - google_play
-      vars:
-        PACKAGE_NAME: "com.kegbatchscanner"
-        GOOGLE_PLAY_TRACK: internal
-      node: 18.18.0
-    scripts:
-      - name: Install npm dependencies
-        script: |
-          npm ci --legacy-peer-deps
-      - name: Set Android SDK location
-        script: |
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/android/local.properties"
-      - name: Set up keystore
-        script: |
-          echo $CM_KEYSTORE | base64 --decode > /tmp/keystore.keystore
-          # keystore_reference is the keystore reference name in environment variables
-          cat >> "$CM_BUILD_DIR/android/key.properties" <<EOF
-          storePassword=$CM_KEYSTORE_PASSWORD
-          keyPassword=$CM_KEY_PASSWORD  
-          keyAlias=$CM_KEY_ALIAS
-          storeFile=/tmp/keystore.keystore
-          EOF
-      - name: Build Android release
-        script: |
-          cd android
-          ./gradlew clean
-          ./gradlew assembleRelease --no-daemon --stacktrace
-    artifacts:
-      - android/app/build/outputs/**/*.apk
-      - android/app/build/outputs/**/mapping.txt
-      - android/app/build/outputs/**/*.aab
-    publishing:
-      email:
-        recipients:
-          - shantu.hasko@ab-inbev.com
-        notify:
-          success: true
-          failure: true
 
-  minimal-build:
-    name: Minimal APK Build (No Crash)
-    max_build_duration: 60
-    instance_type: mac_mini_m1
-    environment:
-      node: 18.18.0
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+
     scripts:
       - name: Install dependencies
         script: |
-          npm ci --legacy-peer-deps
-      - name: Set Android SDK
-        script: |
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/android/local.properties"
-      - name: Build debug APK
+          npm ci || npm install
+
+      - name: Build Android APK (debug)
         script: |
           cd android
           ./gradlew clean
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleDebug
+
     artifacts:
       - android/app/build/outputs/**/*.apk
-    publishing:
-      email:
-        recipients:
-          - shantu.hasko@ab-inbev.com
-        notify:
-          success: true
-          failure: true
