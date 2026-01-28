@@ -1,4 +1,4 @@
-// App.js - Keg Batch Scanner with Modern OCR
+// App.js - Keg Batch Scanner with Simplified OCR
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
@@ -13,8 +13,7 @@ import {
   Platform,
 } from 'react-native';
 import { Camera, useCameraDevices, useCameraPermission } from 'react-native-vision-camera';
-import { runOnJS } from 'react-native-reanimated';
-import TextRecognition from '@react-native-ml-kit/text-recognition';
+import MlkitOcr from 'react-native-mlkit-ocr';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 
@@ -156,11 +155,17 @@ const App = () => {
     lastProcessedTime.current = now;
 
     try {
-      // Use the correct ML Kit 2.0.0 API
-      const result = await TextRecognition.recognize(imageUri);
-      console.log('OCR Result:', result.text);
+      // Use the more stable react-native-mlkit-ocr
+      const result = await MlkitOcr.detectFromUri(imageUri);
+      console.log('OCR Result:', result);
       
-      const lCode = extractLCode(result.text);
+      // Extract text from blocks
+      let allText = '';
+      if (result && result.length > 0) {
+        allText = result.map(block => block.text).join(' ');
+      }
+      
+      const lCode = extractLCode(allText);
       
       if (lCode && lCode !== lastResult?.lCode) {
         const timestamp = new Date().toISOString();
@@ -174,7 +179,7 @@ const App = () => {
           await saveOfflineData(batchData);
         }
         
-        runOnJS(setLastResult)({
+        setLastResult({
           success: true,
           message: `L-Code found: ${lCode}`,
           lCode: lCode
@@ -185,13 +190,13 @@ const App = () => {
         
         // Reset result after 3 seconds
         setTimeout(() => {
-          runOnJS(setLastResult)(null);
+          setLastResult(null);
         }, 3000);
       }
       
     } catch (error) {
       console.log('OCR processing error:', error);
-      runOnJS(setLastResult)({
+      setLastResult({
         success: false,
         message: 'Error processing image. Try again.',
       });
