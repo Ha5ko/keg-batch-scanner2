@@ -1,59 +1,58 @@
 #!/bin/bash
-set -e
 
-echo "🍺 Keg Batch Scanner setup"
+echo "🔧 Keg Batch Scanner - Crash-Free Setup"
+echo "======================================="
 
-echo "📦 Installing dependencies..."
-rm -rf node_modules package-lock.json
+# Make sure we're in the right directory
+if [ ! -f "package.json" ]; then
+    echo "❌ package.json not found. Make sure you're in the project directory."
+    exit 1
+fi
+
+echo ""
+echo "1️⃣ Cleaning old installation..."
+rm -rf node_modules
+rm -f package-lock.json
+rm -f yarn.lock
+
+echo ""
+echo "2️⃣ Installing dependencies..."
 npm install --legacy-peer-deps
 
-echo "🔎 Checking for android/ folder..."
+echo ""
+echo "3️⃣ Setting up Android..."
 if [ ! -d "android" ]; then
-  echo "📱 android/ not found. Generating RN template android project..."
-  npx react-native@0.72.10 init KegBatchScannerTemp --version 0.72.10 --skip-install
-  cp -R KegBatchScannerTemp/android .
-  rm -rf KegBatchScannerTemp
-  echo "✅ android/ generated"
+    echo "⚠️  Android directory not found. This might be a fresh React Native project."
+    echo "Run: npx react-native init KegBatchScanner"
+    echo "Then copy these files over."
 else
-  echo "✅ android/ already exists"
+    echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+    
+    # Copy manifest to correct location
+    if [ -f "AndroidManifest.xml" ]; then
+        cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+        echo "✅ AndroidManifest.xml copied"
+    fi
 fi
 
-echo "📄 Copying AndroidManifest.xml into android project..."
-mkdir -p android/app/src/main
-if [ -f "AndroidManifest.xml" ]; then
-  cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-  echo "✅ Manifest copied"
+echo ""
+echo "4️⃣ Building clean APK..."
+if [ -d "android" ]; then
+    cd android
+    ./gradlew clean
+    echo "✅ Android project cleaned"
+    cd ..
 else
-  echo "⚠️ AndroidManifest.xml not found at repo root (skipping)"
+    echo "⚠️  Skipping Android clean (directory not found)"
 fi
 
-echo "⚙️ Writing android/gradle.properties (safe + FLIPPER_VERSION)..."
-cat > android/gradle.properties << 'EOF'
-org.gradle.jvmargs=-Xmx4g -Dkotlin.daemon.jvm.options=-Xmx2g
-org.gradle.parallel=true
-org.gradle.daemon=true
-org.gradle.configureondemand=true
-
-android.useAndroidX=true
-android.enableJetifier=true
-
-newArchEnabled=false
-hermesEnabled=true
-
-FLIPPER_VERSION=0.201.0
-EOF
-
-echo "✅ gradle.properties written"
-
-if [ -n "$ANDROID_SDK_ROOT" ]; then
-  echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
-  echo "✅ android/local.properties set"
-else
-  echo "⚠️ ANDROID_SDK_ROOT not set. You may need to set sdk.dir manually."
-fi
-
-echo "🧹 Gradle clean..."
-cd android
-chmod +x ./gradlew
-./gradlew clean
-echo "✅ Done"
+echo ""
+echo "✅ Setup complete!"
+echo ""
+echo "🚀 Next steps:"
+echo "1. Test the minimal app first: npm run android"
+echo "2. If it works, we'll add camera features incrementally"
+echo "3. If it still crashes, run: bash diagnose.sh"
+echo ""
+echo "📝 This minimal version should NOT crash and will show:"
+echo "   'Keg Batch Scanner' with 'Loading...' text"
