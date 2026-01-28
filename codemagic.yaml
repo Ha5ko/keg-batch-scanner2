@@ -1,13 +1,13 @@
 workflows:
-  android-apk:
-    name: Android APK (Repair Gradle + Build)
-    max_build_duration: 60
-    instance_type: linux_x2
-
+  android-apk-build:
+    name: Android APK Build
+    max_build_duration: 45
+    instance_type: mac_mini_m1
     environment:
-      node: 18
-      java: 11
-
+      vars:
+        PACKAGE_NAME: "com.kegbatchscanner"
+      node: 16
+      xcode: latest
     triggering:
       events:
         - push
@@ -17,119 +17,100 @@ workflows:
         - pattern: main
           include: true
           source: true
-
     scripts:
-      - name: Generate fresh Android project
+      - name: Setup fresh React Native project structure
         script: |
-          set -e
-          echo "🧼 Forcing fresh android/ each build..."
-          rm -rf android ios KegBatchScannerTemp
-
-          echo "📱 Creating RN template project (0.72.10)..."
-          npx react-native@0.72.10 init KegBatchScannerTemp --version 0.72.10 --skip-install
-
-          cp -R KegBatchScannerTemp/android .
-          rm -rf KegBatchScannerTemp
-          echo "✅ android/ generated"
-
-      - name: Install JS dependencies
+          echo "🚀 Creating fresh React Native project structure..."
+          
+          # Remove any existing android directory
+          rm -rf android ios
+          
+          # Create fresh RN project to get clean android structure
+          npx react-native@0.72.10 init TempProject --version 0.72.10
+          
+          # Copy the clean android structure
+          cp -R TempProject/android .
+          
+          # Clean up
+          rm -rf TempProject
+          
+          echo "✅ Fresh Android project structure created"
+          
+      - name: Install dependencies
         script: |
-          set -e
-          echo "📦 Installing dependencies..."
+          echo "📦 Installing npm dependencies..."
           npm install --legacy-peer-deps
-
-      - name: Configure Android SDK + Manifest + gradle.properties
+          
+      - name: Configure Android build
         script: |
-          set -e
           echo "🔧 Configuring Android build..."
+          
+          # Set Android SDK path
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
-
+          
+          # Ensure manifest directory exists
           mkdir -p android/app/src/main
+          
+          # Copy custom manifest if it exists
           if [ -f "AndroidManifest.xml" ]; then
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-            echo "✅ Copied AndroidManifest.xml into android/app/src/main/"
+            echo "✅ Custom AndroidManifest.xml copied"
           else
-            echo "❌ AndroidManifest.xml not found at repo root"
-            exit 1
+            echo "⚠️  Using default AndroidManifest.xml"
           fi
-
-          cat > android/gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx4g -Dkotlin.daemon.jvm.options=-Xmx2g
+          
+          # Configure gradle.properties for optimal build
+          cat >> android/gradle.properties << EOF
+          
+          # Build optimizations
+          org.gradle.jvmargs=-Xmx4g
           org.gradle.parallel=true
           org.gradle.daemon=true
-          org.gradle.configureondemand=true
-
+          
+          # Android settings
           android.useAndroidX=true
           android.enableJetifier=true
-
+          
+          # React Native settings
           newArchEnabled=false
           hermesEnabled=true
           EOF
-
-          echo "✅ android/gradle.properties written"
-
-      - name: Repair Hermes/JSC block in android/app/build.gradle
+          
+          echo "✅ Android configuration complete"
+          
+      - name: Build Android APK
         script: |
-          set -e
-          APP_GRADLE="android/app/build.gradle"
-
-          echo "🔍 Showing lines 95–135 BEFORE repair:"
-          nl -ba "$APP_GRADLE" | sed -n '95,135p' || true
-
-          # 1) Remove ANY existing broken hermes/jsc conditional block variants
-          #    We delete from the start of the hermesEnabled if-block up to the next closing brace that ends it.
-          #    Then we insert a known-good block.
-          #
-          # Known-good snippet:
-          # if (hermesEnabled.toBoolean()) {
-          #     implementation("com.facebook.react:hermes-android")
-          # } else {
-          #     implementation jscFlavor
-          # }
-          #
-          perl -0777 -i -pe '
-            # Delete any existing hermesEnabled conditional (even if malformed)
-            s/\n\s*if\s*\(\s*hermesEnabled\.toBoolean\(\)\s*\)\s*\{[\s\S]*?\n\s*\}\s*//g;
-
-            # Also delete the common malformed standalone jscFlavor block: "{ implementation jscFlavor }"
-            s/\n\s*\{\s*\n\s*implementation\s+jscFlavor\s*\n\s*\}\s*//g;
-          ' "$APP_GRADLE"
-
-          # 2) Insert the known-good conditional right after the line defining jscFlavor
-          #    (This keeps it inside dependencies {} where templates expect it.)
-          perl -i -pe '
-            if (!$done && $_ =~ /def\s+jscFlavor\s*=/) {
-              $done=1;
-              $_ .= "\n// ✅ CI Repair: ensure Hermes/JSC dependency block is valid Groovy\n";
-              $_ .= "if (hermesEnabled.toBoolean()) {\n";
-              $_ .= "    implementation(\"com.facebook.react:hermes-android\")\n";
-              $_ .= "} else {\n";
-              $_ .= "    implementation jscFlavor\n";
-              $_ .= "}\n";
-            }
-          ' "$APP_GRADLE"
-
-          echo "🔍 Showing lines 95–135 AFTER repair:"
-          nl -ba "$APP_GRADLE" | sed -n '95,135p' || true
-
-      - name: Disable Flipper dependencies safely
-        script: |
-          set -e
-          APP_GRADLE="android/app/build.gradle"
-          echo "🧯 Removing Flipper dependency lines only..."
-          sed -i '/debugImplementation.*com\.facebook\.flipper:/d' "$APP_GRADLE"
-          sed -i '/releaseImplementation.*com\.facebook\.flipper:/d' "$APP_GRADLE"
-          echo "✅ Flipper lines removed (if present)"
-
-      - name: Build Debug APK
-        script: |
-          set -e
+          echo "🔨 Building Android APK..."
+          
           cd android
+          
+          # Make gradlew executable
           chmod +x ./gradlew
-          ./gradlew --version
+          
+          # Clean previous builds
           ./gradlew clean
+          
+          # Build debug APK
           ./gradlew assembleDebug --no-daemon --stacktrace
-
+          
+          # Verify APK was created
+          if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+            echo "✅ APK built successfully!"
+            ls -la app/build/outputs/apk/debug/app-debug.apk
+          else
+            echo "❌ APK build failed - no output file found"
+            ls -la app/build/outputs/apk/ || true
+            exit 1
+          fi
+          
     artifacts:
       - android/app/build/outputs/**/*.apk
       - android/app/build/reports/**
+      
+    publishing:
+      email:
+        recipients:
+          - shantu.hasko@ab-inbev.com
+        notify:
+          success: true
+          failure: true
