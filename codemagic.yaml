@@ -41,7 +41,7 @@ workflows:
     publishing:
       email:
         recipients:
-          - user@example.com
+          - shantu.hasko@ab-inbev.com
         notify:
           success: true
           failure: true
@@ -69,7 +69,7 @@ workflows:
     publishing:
       email:
         recipients:
-          - user@example.com
+          - shantu.hasko@ab-inbev.com
         notify:
           success: true
           failure: true
