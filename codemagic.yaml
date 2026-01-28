@@ -1,6 +1,6 @@
 workflows:
   android-apk-build:
-    name: Android APK Build
+    name: Android APK Build (Release)
     max_build_duration: 45
     instance_type: mac_mini_m1
     environment:
@@ -51,12 +51,15 @@ workflows:
           # Ensure manifest directory exists
           mkdir -p android/app/src/main
           
-          # Copy custom manifest if it exists
-          if [ -f "AndroidManifest.xml" ]; then
+          # Copy custom manifest if it exists  
+          if [ -f "AndroidManifest-minimal.xml" ]; then
+            cp AndroidManifest-minimal.xml android/app/src/main/AndroidManifest.xml
+            echo "✅ Minimal AndroidManifest.xml copied"
+          elif [ -f "AndroidManifest.xml" ]; then
             cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-            echo "✅ Custom AndroidManifest.xml copied"
+            echo "✅ AndroidManifest.xml copied"
           else
-            echo "⚠️  Using default AndroidManifest.xml"
+            echo "⚠️ Using default AndroidManifest.xml"
           fi
           
           # Configure gradle.properties for optimal build
@@ -78,9 +81,9 @@ workflows:
           
           echo "✅ Android configuration complete"
           
-      - name: Build Android APK
+      - name: Build standalone release APK
         script: |
-          echo "🔨 Building Android APK..."
+          echo "🔨 Building standalone release APK..."
           
           cd android
           
@@ -90,16 +93,25 @@ workflows:
           # Clean previous builds
           ./gradlew clean
           
-          # Build debug APK
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          # Build release APK (unsigned but standalone)
+          ./gradlew assembleRelease --no-daemon --stacktrace
           
           # Verify APK was created
-          if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
-            echo "✅ APK built successfully!"
-            ls -la app/build/outputs/apk/debug/app-debug.apk
+          if [ -f "app/build/outputs/apk/release/app-release-unsigned.apk" ]; then
+            echo "✅ Release APK built successfully!"
+            ls -la app/build/outputs/apk/release/app-release-unsigned.apk
+          elif [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
+            echo "✅ Release APK built successfully!"
+            ls -la app/build/outputs/apk/release/app-release.apk
           else
-            echo "❌ APK build failed - no output file found"
+            echo "❌ Release APK build failed - no output file found"
             ls -la app/build/outputs/apk/ || true
+            echo "Trying debug APK as fallback..."
+            ./gradlew assembleDebug --no-daemon --stacktrace
+            if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+              echo "⚠️ Debug APK created as fallback"
+              ls -la app/build/outputs/apk/debug/app-debug.apk
+            fi
             exit 1
           fi
           
