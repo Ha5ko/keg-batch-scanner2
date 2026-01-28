@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  Linking,
   Platform,
   SafeAreaView,
   StyleSheet,
@@ -10,14 +9,21 @@ import {
   View,
 } from 'react-native';
 
-import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+import { Camera, useCameraDevices } from 'react-native-vision-camera';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const GOOGLE_SHEETS_WEBHOOK_URL = 'PUT_YOUR_WEBHOOK_URL_HERE';
+// ✅ Your webhook (hard-coded as requested)
+const GOOGLE_SHEETS_WEBHOOK_URL =
+  'https://script.google.com/macros/s/AKfycby87KX7t0nmio433zyB7H0fl2-7-zhZ3GFY6q9yp7b9zGp41rglrgolg4RMN156yrcUnA/exec';
+
 const QUEUE_KEY = 'keg_scan_queue_v1';
 
 // L + 3-6 digits + optional letters + optional time "HH:MM"
+// Examples it will catch:
+// L50780A
+// L50780A 10:52
+// L5149MA 13:53
 const LCODE_REGEX = /\bL[0-9]{3,6}[A-Z]{0,3}(?:\s*[0-2]?\d:[0-5]\d)?\b/g;
 
 function extractLCode(text) {
@@ -32,9 +38,11 @@ async function getQueue() {
   const raw = await AsyncStorage.getItem(QUEUE_KEY);
   return raw ? JSON.parse(raw) : [];
 }
+
 async function setQueue(queue) {
   await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
 }
+
 async function enqueue(item) {
   const q = await getQueue();
   q.push(item);
@@ -47,6 +55,7 @@ async function postToWebhook(payload) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
     throw new Error(`Webhook failed: ${res.status} ${res.statusText} ${txt}`.trim());
@@ -55,9 +64,11 @@ async function postToWebhook(payload) {
 
 export default function App() {
   const cameraRef = useRef(null);
-  const device = useCameraDevice('back');
-  const { hasPermission, requestPermission } = useCameraPermission();
 
+  const devices = useCameraDevices();
+  const device = devices.back;
+
+  const [hasPermission, setHasPermission] = useState(false);
   const [status, setStatus] = useState('Idle');
   const [lastLCode, setLastLCode] = useState('');
   const [lastText, setLastText] = useState('');
@@ -65,23 +76,18 @@ export default function App() {
 
   const canUseCamera = useMemo(() => !!device && hasPermission, [device, hasPermission]);
 
-  const askForCameraPermission = useCallback(async () => {
-    const ok = await requestPermission();
-    if (!ok) {
-      Alert.alert(
-        'Camera permission needed',
-        'Enable camera permission to scan L-codes.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Open Settings', onPress: () => Linking.openSettings() },
-        ]
-      );
+  const requestPermission = useCallback(async () => {
+    const cam = await Camera.requestCameraPermission();
+    setHasPermission(cam === 'authorized');
+    if (cam !== 'authorized') {
+      Alert.alert('Camera permission needed', 'Please allow camera permission to scan.');
     }
-  }, [requestPermission]);
+  }, []);
 
   const flushQueue = useCallback(async () => {
     const q = await getQueue();
     if (q.length === 0) return;
+
     const remaining = [];
     for (const item of q) {
       try {
@@ -91,25 +97,24 @@ export default function App() {
       }
     }
     await setQueue(remaining);
+
     if (remaining.length === 0) setStatus('Synced queued scans ✅');
+    else setStatus(`Still queued: ${remaining.length}`);
   }, []);
 
   useEffect(() => {
+    requestPermission().catch(() => {});
     flushQueue().catch(() => {});
-  }, [flushQueue]);
+  }, [requestPermission, flushQueue]);
 
   const scanOnce = useCallback(async () => {
     if (!canUseCamera || !cameraRef.current) return;
-
-    if (!GOOGLE_SHEETS_WEBHOOK_URL || GOOGLE_SHEETS_WEBHOOK_URL.includes('PUT_YOUR')) {
-      Alert.alert('Missing webhook URL', 'Set GOOGLE_SHEETS_WEBHOOK_URL in App.js');
-      return;
-    }
 
     setBusy(true);
     setStatus('Taking photo…');
 
     try {
+      // Photo capture = simplest stable OCR route
       const photo = await cameraRef.current.takePhoto({
         flash: 'off',
         enableShutterSound: false,
@@ -117,15 +122,18 @@ export default function App() {
 
       setStatus('Running OCR…');
 
+      // ML Kit expects a local file path on Android
       const result = await TextRecognition.recognize(photo.path);
       const text = (result?.text || '').trim();
-
       setLastText(text);
 
       const lCode = extractLCode(text);
       if (!lCode) {
         setStatus('No L-code found');
-        Alert.alert('No L-code detected', 'Try better lighting and get closer to the label.');
+        Alert.alert(
+          'No L-code detected',
+          'Try: better lighting, move closer, keep label centered and sharp.'
+        );
         return;
       }
 
@@ -158,7 +166,7 @@ export default function App() {
     return (
       <SafeAreaView style={styles.center}>
         <Text style={styles.title}>No back camera found</Text>
-        <Text style={styles.small}>Use a real Android phone (emulators often lack camera).</Text>
+        <Text style={styles.small}>Run on a real Android phone (not an emulator).</Text>
       </SafeAreaView>
     );
   }
@@ -167,7 +175,7 @@ export default function App() {
     return (
       <SafeAreaView style={styles.center}>
         <Text style={styles.title}>Camera permission required</Text>
-        <TouchableOpacity style={styles.button} onPress={askForCameraPermission}>
+        <TouchableOpacity style={styles.button} onPress={requestPermission}>
           <Text style={styles.buttonText}>Grant Camera Permission</Text>
         </TouchableOpacity>
       </SafeAreaView>
@@ -200,9 +208,7 @@ export default function App() {
         </TouchableOpacity>
 
         {!!lastLCode && <Text style={styles.result}>Last L-code: {lastLCode}</Text>}
-        {!!lastText && (
-          <Text numberOfLines={4} style={styles.small}>OCR: {lastText}</Text>
-        )}
+        {!!lastText && <Text numberOfLines={4} style={styles.small}>OCR: {lastText}</Text>}
 
         <TouchableOpacity style={styles.linkBtn} onPress={flushQueue}>
           <Text style={styles.linkText}>Try upload queued scans</Text>
