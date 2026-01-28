@@ -12,9 +12,9 @@ workflows:
           include: true
 
     scripts:
-      - name: Install JS dependencies
+      - name: Install JS dependencies (no lockfile yet)
         script: |
-          npm ci || npm install
+          npm install
 
       - name: Build debug APK
         script: |
