@@ -12,15 +12,33 @@ workflows:
           include: true
 
     scripts:
-      - name: Install JS dependencies (no lockfile yet)
+      - name: Install JS dependencies
         script: |
           npm install
 
+      - name: Locate Android project folder
+        script: |
+          echo "Searching for android/ directory..."
+          ANDROID_DIR=$(find . -maxdepth 4 -type d -name android -print -quit)
+          if [ -z "$ANDROID_DIR" ]; then
+            echo "❌ ERROR: No android/ directory found in this repo."
+            echo "This repo must include a React Native Android project (android/ folder)."
+            echo "Top-level folders:"
+            ls -la
+            echo "Folders within 2 levels:"
+            find . -maxdepth 2 -type d -print
+            exit 1
+          fi
+          echo "✅ Found android dir at: $ANDROID_DIR"
+          echo "ANDROID_DIR=$ANDROID_DIR" >> $CM_ENV
+
       - name: Build debug APK
         script: |
-          cd android
+          echo "Building from: $ANDROID_DIR"
+          cd "$ANDROID_DIR"
+          chmod +x ./gradlew
           ./gradlew clean
           ./gradlew assembleDebug
 
     artifacts:
-      - android/app/build/outputs/**/*.apk
+      - "**/android/app/build/outputs/**/*.apk"
