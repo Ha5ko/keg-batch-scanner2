@@ -1,96 +1,56 @@
-// App.js - Keg Batch Scanner with Simplified OCR
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+// App.js - Minimal Keg Scanner (Test Build)
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
-  Alert,
   StyleSheet,
-  Dimensions,
   StatusBar,
-  ActivityIndicator,
-  BackHandler,
-  Platform,
+  Alert,
 } from 'react-native';
-import { Camera, useCameraDevices, useCameraPermission } from 'react-native-vision-camera';
-import MlkitOcr from 'react-native-mlkit-ocr';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 
 // IMPORTANT: Replace this with YOUR Google Apps Script Web App URL
 const GOOGLE_SHEETS_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycby87KX7t0nmio433zyB7H0fl2-7-zhZ3GFY6q9yp7b9zGp41rglrgolg4RMN156yrcUnA/exec';
 
-const { width, height } = Dimensions.get('window');
-
 const App = () => {
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [lastResult, setLastResult] = useState(null);
+  const [scannedCodes, setScannedCodes] = useState([]);
   const [offlineQueue, setOfflineQueue] = useState([]);
-  const [isActive, setIsActive] = useState(true);
-  const [hasPermission, setHasPermission] = useState(false);
-  
-  const devices = useCameraDevices();
-  const device = devices.back;
-  const { hasPermission: cameraPermission, requestPermission } = useCameraPermission();
-  
-  const cameraRef = useRef(null);
-  const lastProcessedTime = useRef(0);
-  const processingLock = useRef(false);
 
   useEffect(() => {
-    requestCameraPermission();
-    loadOfflineQueue();
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => true);
-    return () => backHandler.remove();
+    loadData();
   }, []);
 
-  const requestCameraPermission = async () => {
+  const loadData = async () => {
     try {
-      if (Platform.OS === 'android') {
-        const result = await request(PERMISSIONS.ANDROID.CAMERA);
-        setHasPermission(result === RESULTS.GRANTED);
-      } else {
-        const granted = await requestPermission();
-        setHasPermission(granted);
-      }
-    } catch (error) {
-      console.log('Permission error:', error);
-      setHasPermission(false);
-    }
-  };
-
-  const loadOfflineQueue = async () => {
-    try {
+      const codes = await AsyncStorage.getItem('scannedCodes');
       const queue = await AsyncStorage.getItem('offlineQueue');
-      if (queue) {
-        setOfflineQueue(JSON.parse(queue));
-      }
+      
+      if (codes) setScannedCodes(JSON.parse(codes));
+      if (queue) setOfflineQueue(JSON.parse(queue));
     } catch (error) {
-      console.log('Error loading offline queue:', error);
+      console.log('Error loading data:', error);
     }
   };
 
-  const saveOfflineData = async (data) => {
+  const saveData = async (codes, queue) => {
     try {
-      const currentQueue = [...offlineQueue, data];
-      await AsyncStorage.setItem('offlineQueue', JSON.stringify(currentQueue));
-      setOfflineQueue(currentQueue);
+      await AsyncStorage.setItem('scannedCodes', JSON.stringify(codes));
+      await AsyncStorage.setItem('offlineQueue', JSON.stringify(queue));
     } catch (error) {
-      console.log('Error saving offline data:', error);
+      console.log('Error saving data:', error);
     }
   };
 
-  const extractLCode = (text) => {
-    // Pattern for L-codes: L + 5 digits + 1-2 letters + optional time
-    // Examples: L50780A 10:52, L5025MB 04:22, L5149MA 13:53
-    const lCodePattern = /L\d{5}[A-Z]{1,2}(?:\s+\d{1,2}:\d{2})?/gi;
-    const matches = text.match(lCodePattern);
-    
-    if (matches && matches.length > 0) {
-      // Return the first match, cleaned up
-      return matches[0].trim();
-    }
-    return null;
+  const generateMockLCode = () => {
+    const numbers = Math.floor(Math.random() * 99999).toString().padStart(5, '0');
+    const letter = String.fromCharCode(65 + Math.floor(Math.random() * 26));
+    const time = new Date().toLocaleTimeString('en-US', { 
+      hour12: false, 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+    return `L${numbers}${letter} ${time}`;
   };
 
   const uploadToGoogleSheets = async (data) => {
@@ -103,7 +63,7 @@ const App = () => {
         body: JSON.stringify({
           lCode: data.lCode,
           timestamp: data.timestamp,
-          device: 'WarehouseScanner'
+          device: 'WarehouseScanner-Test'
         }),
       });
       
@@ -117,220 +77,107 @@ const App = () => {
     }
   };
 
+  const simulateScanning = async () => {
+    const mockLCode = generateMockLCode();
+    const timestamp = new Date().toISOString();
+    const batchData = { lCode: mockLCode, timestamp };
+    
+    // Try to upload immediately
+    const uploadSuccess = await uploadToGoogleSheets(batchData);
+    
+    const newCodes = [...scannedCodes, mockLCode];
+    let newQueue = [...offlineQueue];
+    
+    if (!uploadSuccess) {
+      // Add to offline queue if upload fails
+      newQueue = [...offlineQueue, batchData];
+    }
+    
+    setScannedCodes(newCodes);
+    setOfflineQueue(newQueue);
+    await saveData(newCodes, newQueue);
+    
+    Alert.alert(
+      'Mock L-Code Scanned',
+      `Code: ${mockLCode}\nStatus: ${uploadSuccess ? 'Uploaded' : 'Queued offline'}`,
+      [{ text: 'OK' }]
+    );
+  };
+
+  const clearData = async () => {
+    setScannedCodes([]);
+    setOfflineQueue([]);
+    await saveData([], []);
+    Alert.alert('Data Cleared', 'All scanned codes cleared.');
+  };
+
   const syncOfflineData = async () => {
-    if (offlineQueue.length === 0) return;
-    
-    try {
-      const successfulUploads = [];
-      
-      for (let i = 0; i < offlineQueue.length; i++) {
-        const data = offlineQueue[i];
-        const success = await uploadToGoogleSheets(data);
-        if (success) {
-          successfulUploads.push(i);
-        } else {
-          break; // Stop if upload fails
-        }
-      }
-      
-      if (successfulUploads.length > 0) {
-        // Remove successfully uploaded items
-        const remainingQueue = offlineQueue.filter((_, index) => !successfulUploads.includes(index));
-        await AsyncStorage.setItem('offlineQueue', JSON.stringify(remainingQueue));
-        setOfflineQueue(remainingQueue);
-      }
-      
-    } catch (error) {
-      console.log('Sync error:', error);
+    if (offlineQueue.length === 0) {
+      Alert.alert('No Data', 'No offline data to sync.');
+      return;
     }
-  };
 
-  const processOCR = useCallback(async (imageUri) => {
-    if (processingLock.current) return;
-    
-    const now = Date.now();
-    if (now - lastProcessedTime.current < 2000) return; // Throttle processing
-    
-    processingLock.current = true;
-    lastProcessedTime.current = now;
+    let successCount = 0;
+    const remainingQueue = [];
 
-    try {
-      // Use the more stable react-native-mlkit-ocr
-      const result = await MlkitOcr.detectFromUri(imageUri);
-      console.log('OCR Result:', result);
-      
-      // Extract text from blocks
-      let allText = '';
-      if (result && result.length > 0) {
-        allText = result.map(block => block.text).join(' ');
-      }
-      
-      const lCode = extractLCode(allText);
-      
-      if (lCode && lCode !== lastResult?.lCode) {
-        const timestamp = new Date().toISOString();
-        const batchData = { lCode, timestamp };
-        
-        // Try to upload immediately
-        const uploadSuccess = await uploadToGoogleSheets(batchData);
-        
-        if (!uploadSuccess) {
-          // Save offline if upload fails
-          await saveOfflineData(batchData);
-        }
-        
-        setLastResult({
-          success: true,
-          message: `L-Code found: ${lCode}`,
-          lCode: lCode
-        });
-        
-        // Auto-sync any offline data
-        setTimeout(() => syncOfflineData(), 1000);
-        
-        // Reset result after 3 seconds
-        setTimeout(() => {
-          setLastResult(null);
-        }, 3000);
-      }
-      
-    } catch (error) {
-      console.log('OCR processing error:', error);
-      setLastResult({
-        success: false,
-        message: 'Error processing image. Try again.',
-      });
-    } finally {
-      processingLock.current = false;
-    }
-  }, [lastResult?.lCode, offlineQueue]);
-
-  const manualCapture = async () => {
-    if (cameraRef.current && !isProcessing) {
-      setIsProcessing(true);
-      setLastResult(null);
-      
-      try {
-        const photo = await cameraRef.current.takePhoto({
-          quality: 'balanced',
-          skipMetadata: true,
-        });
-        
-        setLastResult({
-          success: false,
-          message: 'Photo captured - processing...',
-        });
-        
-        // Process with file:// prefix for local files
-        await processOCR(`file://${photo.path}`);
-        
-      } catch (error) {
-        console.log('Camera error:', error);
-        setLastResult({
-          success: false,
-          message: 'Error taking photo. Please try again.',
-        });
-      } finally {
-        setTimeout(() => {
-          setIsProcessing(false);
-        }, 2000);
+    for (const data of offlineQueue) {
+      const success = await uploadToGoogleSheets(data);
+      if (success) {
+        successCount++;
+      } else {
+        remainingQueue.push(data);
+        break; // Stop on first failure
       }
     }
-  };
 
-  const onError = useCallback((error) => {
-    console.error('Camera error:', error);
-  }, []);
-
-  const ResultIndicator = () => {
-    if (!lastResult) return null;
+    setOfflineQueue(remainingQueue);
+    await saveData(scannedCodes, remainingQueue);
     
-    return (
-      <View style={[
-        styles.resultContainer,
-        { backgroundColor: lastResult.success ? '#4CAF50' : '#F44336' }
-      ]}>
-        <Text style={styles.resultText}>{lastResult.message}</Text>
-      </View>
+    Alert.alert(
+      'Sync Complete', 
+      `${successCount} items synced successfully.\n${remainingQueue.length} items remain offline.`
     );
   };
-
-  // Show permission request screen
-  if (!hasPermission) {
-    return (
-      <View style={styles.permissionContainer}>
-        <Text style={styles.permissionText}>Camera permission is required</Text>
-        <TouchableOpacity style={styles.permissionButton} onPress={requestCameraPermission}>
-          <Text style={styles.permissionButtonText}>Grant Permission</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  // Show loading if camera device is not ready
-  if (device == null) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Loading camera...</Text>
-      </View>
-    );
-  }
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+      <StatusBar barStyle="light-content" backgroundColor="#1a1a1a" />
       
-      <Camera
-        ref={cameraRef}
-        style={styles.camera}
-        device={device}
-        isActive={isActive}
-        photo={true}
-        onError={onError}
-      />
+      <Text style={styles.title}>Keg Batch Scanner</Text>
+      <Text style={styles.subtitle}>Test Version - Build Verification</Text>
       
-      <View style={styles.overlay}>
-        <Text style={styles.title}>Keg Batch Scanner</Text>
-        <Text style={styles.instruction}>
-          Point camera at L-code on keg label
-        </Text>
-        <Text style={styles.subInstruction}>
-          Tap CAPTURE to scan
-        </Text>
-        
-        {/* Viewfinder frame */}
-        <View style={styles.viewfinder}>
-          <View style={styles.viewfinderCorner} />
-          <View style={[styles.viewfinderCorner, styles.topRight]} />
-          <View style={[styles.viewfinderCorner, styles.bottomLeft]} />
-          <View style={[styles.viewfinderCorner, styles.bottomRight]} />
-        </View>
-        
-        <ResultIndicator />
-        
-        <View style={styles.buttonContainer}>
-          <TouchableOpacity
-            style={[styles.captureButton, isProcessing && styles.captureButtonDisabled]}
-            onPress={manualCapture}
-            disabled={isProcessing}
-          >
-            {isProcessing ? (
-              <ActivityIndicator size="large" color="#FFFFFF" />
-            ) : (
-              <Text style={styles.captureButtonText}>CAPTURE</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-        
-        {offlineQueue.length > 0 && (
-          <View style={styles.offlineIndicator}>
-            <Text style={styles.offlineText}>
-              {offlineQueue.length} items queued for sync
-            </Text>
-          </View>
+      <View style={styles.statsContainer}>
+        <Text style={styles.statsText}>Scanned: {scannedCodes.length}</Text>
+        <Text style={styles.statsText}>Offline: {offlineQueue.length}</Text>
+      </View>
+      
+      <TouchableOpacity style={styles.scanButton} onPress={simulateScanning}>
+        <Text style={styles.scanButtonText}>SIMULATE SCAN</Text>
+      </TouchableOpacity>
+      
+      <View style={styles.buttonRow}>
+        <TouchableOpacity style={styles.smallButton} onPress={syncOfflineData}>
+          <Text style={styles.smallButtonText}>SYNC OFFLINE</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.smallButton} onPress={clearData}>
+          <Text style={styles.smallButtonText}>CLEAR DATA</Text>
+        </TouchableOpacity>
+      </View>
+      
+      <View style={styles.resultsContainer}>
+        <Text style={styles.resultsTitle}>Recent L-Codes:</Text>
+        {scannedCodes.slice(-5).reverse().map((code, index) => (
+          <Text key={index} style={styles.resultItem}>{code}</Text>
+        ))}
+        {scannedCodes.length === 0 && (
+          <Text style={styles.emptyText}>No codes scanned yet</Text>
         )}
       </View>
+      
+      <Text style={styles.note}>
+        This minimal version tests basic React Native functionality.
+        Camera and OCR will be added once build succeeds.
+      </Text>
     </View>
   );
 };
@@ -338,169 +185,91 @@ const App = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000',
-  },
-  camera: {
-    flex: 1,
-  },
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    justifyContent: 'space-between',
+    backgroundColor: '#1a1a1a',
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingTop: 50,
-    paddingBottom: 50,
+    paddingHorizontal: 20,
   },
   title: {
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: 'bold',
     color: '#FFFFFF',
     textAlign: 'center',
+    marginBottom: 10,
   },
-  instruction: {
+  subtitle: {
     fontSize: 16,
-    color: '#FFFFFF',
-    textAlign: 'center',
-    marginTop: 10,
-    paddingHorizontal: 20,
-  },
-  subInstruction: {
-    fontSize: 14,
     color: '#CCCCCC',
     textAlign: 'center',
-    marginTop: 5,
-    fontStyle: 'italic',
+    marginBottom: 30,
   },
-  viewfinder: {
-    width: width * 0.8,
-    height: 200,
-    position: 'relative',
+  statsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+    marginBottom: 30,
   },
-  viewfinderCorner: {
-    position: 'absolute',
-    width: 30,
-    height: 30,
-    borderColor: '#FFFFFF',
-    borderWidth: 3,
-    borderTopWidth: 3,
-    borderLeftWidth: 3,
-    borderRightWidth: 0,
-    borderBottomWidth: 0,
-    top: 0,
-    left: 0,
-  },
-  topRight: {
-    top: 0,
-    right: 0,
-    left: 'auto',
-    borderLeftWidth: 0,
-    borderRightWidth: 3,
-    borderTopWidth: 3,
-    borderBottomWidth: 0,
-  },
-  bottomLeft: {
-    bottom: 0,
-    top: 'auto',
-    left: 0,
-    borderTopWidth: 0,
-    borderBottomWidth: 3,
-    borderLeftWidth: 3,
-    borderRightWidth: 0,
-  },
-  bottomRight: {
-    bottom: 0,
-    right: 0,
-    top: 'auto',
-    left: 'auto',
-    borderTopWidth: 0,
-    borderBottomWidth: 3,
-    borderRightWidth: 3,
-    borderLeftWidth: 0,
-  },
-  resultContainer: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 5,
-    marginHorizontal: 20,
-  },
-  resultText: {
-    color: '#FFFFFF',
+  statsText: {
     fontSize: 16,
-    textAlign: 'center',
+    color: '#FFFFFF',
     fontWeight: 'bold',
   },
-  buttonContainer: {
-    alignItems: 'center',
-  },
-  captureButton: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+  scanButton: {
     backgroundColor: '#007AFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 5,
-    borderColor: '#FFFFFF',
-  },
-  captureButtonDisabled: {
-    backgroundColor: '#666666',
-  },
-  captureButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  offlineIndicator: {
-    position: 'absolute',
-    bottom: 10,
-    left: 20,
-    right: 20,
-    backgroundColor: 'rgba(255, 152, 0, 0.9)',
-    padding: 8,
-    borderRadius: 5,
-  },
-  offlineText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    textAlign: 'center',
-  },
-  permissionContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#000000',
-  },
-  permissionText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    textAlign: 'center',
+    paddingHorizontal: 40,
+    paddingVertical: 20,
+    borderRadius: 10,
     marginBottom: 20,
   },
-  permissionButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderRadius: 10,
-  },
-  permissionButtonText: {
+  scanButtonText: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: 'bold',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#000000',
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+    marginBottom: 30,
   },
-  loadingText: {
+  smallButton: {
+    backgroundColor: '#666666',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  smallButtonText: {
     color: '#FFFFFF',
-    fontSize: 16,
-    marginTop: 10,
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  resultsContainer: {
+    marginTop: 20,
+    width: '100%',
+  },
+  resultsTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    marginBottom: 10,
+  },
+  resultItem: {
+    fontSize: 14,
+    color: '#CCCCCC',
+    marginBottom: 5,
+    fontFamily: 'monospace',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#999999',
+    fontStyle: 'italic',
+  },
+  note: {
+    fontSize: 12,
+    color: '#999999',
+    textAlign: 'center',
+    marginTop: 30,
+    fontStyle: 'italic',
   },
 });
 
