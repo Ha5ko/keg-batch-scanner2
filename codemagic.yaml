@@ -1,128 +1,75 @@
 workflows:
-  android-apk-build:
-    name: Android APK Build (Release)
-    max_build_duration: 45
+  react-native-android:
+    name: React Native Android - Crash-Free Build
+    max_build_duration: 120
     instance_type: mac_mini_m1
     environment:
+      android_signing:
+        - keystore_reference
+      groups:
+        - google_play
       vars:
         PACKAGE_NAME: "com.kegbatchscanner"
-      node: 16
-      xcode: latest
-    triggering:
-      events:
-        - push
-        - pull_request
-        - tag
-      branch_patterns:
-        - pattern: main
-          include: true
-          source: true
+        GOOGLE_PLAY_TRACK: internal
+      node: 18.18.0
     scripts:
-      - name: Setup fresh React Native project structure
+      - name: Install npm dependencies
         script: |
-          echo "🚀 Creating fresh React Native project structure..."
-          
-          # Remove any existing android directory
-          rm -rf android ios
-          
-          # Create fresh RN project to get clean android structure
-          npx react-native@0.72.10 init TempProject --version 0.72.10
-          
-          # Copy the clean android structure
-          cp -R TempProject/android .
-          
-          # Clean up
-          rm -rf TempProject
-          
-          echo "✅ Fresh Android project structure created"
-          
-      - name: Install dependencies
+          npm ci --legacy-peer-deps
+      - name: Set Android SDK location
         script: |
-          echo "📦 Installing npm dependencies..."
-          npm install --legacy-peer-deps
-          
-      - name: Configure Android build
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/android/local.properties"
+      - name: Set up keystore
         script: |
-          echo "🔧 Configuring Android build..."
-          
-          # Set Android SDK path
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
-          
-          # Ensure manifest directory exists
-          mkdir -p android/app/src/main
-          
-          # Copy custom manifest if it exists  
-          if [ -f "AndroidManifest-minimal.xml" ]; then
-            cp AndroidManifest-minimal.xml android/app/src/main/AndroidManifest.xml
-            echo "✅ Minimal AndroidManifest.xml copied"
-          elif [ -f "AndroidManifest.xml" ]; then
-            cp AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-            echo "✅ AndroidManifest.xml copied"
-          else
-            echo "⚠️ Using default AndroidManifest.xml"
-          fi
-          
-          # Configure gradle.properties for optimal build
-          cat >> android/gradle.properties << EOF
-          
-          # Build optimizations
-          org.gradle.jvmargs=-Xmx4g
-          org.gradle.parallel=true
-          org.gradle.daemon=true
-          
-          # Android settings
-          android.useAndroidX=true
-          android.enableJetifier=true
-          
-          # React Native settings
-          newArchEnabled=false
-          hermesEnabled=true
+          echo $CM_KEYSTORE | base64 --decode > /tmp/keystore.keystore
+          # keystore_reference is the keystore reference name in environment variables
+          cat >> "$CM_BUILD_DIR/android/key.properties" <<EOF
+          storePassword=$CM_KEYSTORE_PASSWORD
+          keyPassword=$CM_KEY_PASSWORD  
+          keyAlias=$CM_KEY_ALIAS
+          storeFile=/tmp/keystore.keystore
           EOF
-          
-          echo "✅ Android configuration complete"
-          
-      - name: Build standalone release APK
+      - name: Build Android release
         script: |
-          echo "🔨 Building standalone release APK..."
-          
           cd android
-          
-          # Make gradlew executable
-          chmod +x ./gradlew
-          
-          # Clean previous builds
           ./gradlew clean
-          
-          # Build release APK (unsigned but standalone)
           ./gradlew assembleRelease --no-daemon --stacktrace
-          
-          # Verify APK was created
-          if [ -f "app/build/outputs/apk/release/app-release-unsigned.apk" ]; then
-            echo "✅ Release APK built successfully!"
-            ls -la app/build/outputs/apk/release/app-release-unsigned.apk
-          elif [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
-            echo "✅ Release APK built successfully!"
-            ls -la app/build/outputs/apk/release/app-release.apk
-          else
-            echo "❌ Release APK build failed - no output file found"
-            ls -la app/build/outputs/apk/ || true
-            echo "Trying debug APK as fallback..."
-            ./gradlew assembleDebug --no-daemon --stacktrace
-            if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
-              echo "⚠️ Debug APK created as fallback"
-              ls -la app/build/outputs/apk/debug/app-debug.apk
-            fi
-            exit 1
-          fi
-          
     artifacts:
       - android/app/build/outputs/**/*.apk
-      - android/app/build/reports/**
-      
+      - android/app/build/outputs/**/mapping.txt
+      - android/app/build/outputs/**/*.aab
     publishing:
       email:
         recipients:
-          - shantu.hasko@ab-inbev.com
+          - user@example.com
+        notify:
+          success: true
+          failure: true
+
+  minimal-build:
+    name: Minimal APK Build (No Crash)
+    max_build_duration: 60
+    instance_type: mac_mini_m1
+    environment:
+      node: 18.18.0
+    scripts:
+      - name: Install dependencies
+        script: |
+          npm ci --legacy-peer-deps
+      - name: Set Android SDK
+        script: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/android/local.properties"
+      - name: Build debug APK
+        script: |
+          cd android
+          ./gradlew clean
+          ./gradlew assembleDebug --no-daemon --stacktrace
+    artifacts:
+      - android/app/build/outputs/**/*.apk
+    publishing:
+      email:
+        recipients:
+          - user@example.com
         notify:
           success: true
           failure: true
